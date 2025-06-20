@@ -20,17 +20,29 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
+
+const cachedTime = 5 * time.Second
+const tickTime = time.Second
+
+// ErrSessionNotFound returned when sessionID not listed in
+// SessionManager
+var ErrSessionNotFound = errors.New("SessionID does not exists")
+
 type SessionManager struct {
 	sessions map[string]Session
+	mu       sync.Mutex
 }
 
 // Session stores the session's data
 type Session struct {
-	Data map[string]interface{}
+	Data       map[string]interface{}
+	LastUpdate time.Time
 }
 
 // NewSessionManager creates a new sessionManager
@@ -39,30 +51,61 @@ func NewSessionManager() *SessionManager {
 		sessions: make(map[string]Session),
 	}
 
+	go m.RunCleaner()
+
 	return m
+}
+
+func (s *Session) CleanAvailable() bool {
+	now := time.Now()
+	return now.Sub(s.LastUpdate) > cachedTime
 }
 
 // CreateSession creates a new session and returns the sessionID
 func (m *SessionManager) CreateSession() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	sessionID, err := MakeSessionID()
 	if err != nil {
 		return "", err
 	}
 
 	m.sessions[sessionID] = Session{
-		Data: make(map[string]interface{}),
+		Data:       make(map[string]interface{}),
+		LastUpdate: time.Now(),
 	}
 
 	return sessionID, nil
 }
 
-// ErrSessionNotFound returned when sessionID not listed in
-// SessionManager
-var ErrSessionNotFound = errors.New("SessionID does not exists")
+func (m *SessionManager) RunCleaner() {
+	ticker := time.NewTicker(tickTime)
+
+	for {
+		<-ticker.C
+		m.mu.Lock()
+		for sID, session := range m.sessions {
+			go m.HandleSession(sID, session)
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *SessionManager) HandleSession(sID string, session Session) {
+	if session.CleanAvailable() {
+		log.Printf("Session with id %s is clean available", sID)
+		m.mu.Lock()
+		delete(m.sessions, sID)
+		m.mu.Unlock()
+	}
+}
 
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	session, ok := m.sessions[sessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
@@ -72,6 +115,9 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 
 // UpdateSessionData overwrites the old session data with the new one
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	_, ok := m.sessions[sessionID]
 	if !ok {
 		return ErrSessionNotFound
@@ -79,7 +125,8 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
-		Data: data,
+		Data:       data,
+		LastUpdate: time.Now(),
 	}
 
 	return nil
@@ -104,7 +151,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("Update session data, set website to longhoang.de")
+	log.Println(".Update session data, set website to longhoang.de")
 
 	// Retrieve data from manager again
 	updatedData, err := m.GetSessionData(sID)
@@ -113,4 +160,9 @@ func main() {
 	}
 
 	log.Println("Get session data:", updatedData)
+
+	time.Sleep(10 * time.Second)
+	for _, session := range m.sessions {
+		log.Println(session)
+	}
 }

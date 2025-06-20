@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestMain(t *testing.T) {
+func Test_Main(t *testing.T) {
 	cache, db := run(t)
 
 	cacheLen := len(cache.cache)
@@ -39,7 +39,7 @@ func TestLRU(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			value := cache.Get("Test" + strconv.Itoa(i))
-			if value != "Test" + strconv.Itoa(i) {
+			if value != "Test"+strconv.Itoa(i) {
 				t.Errorf("Incorrect db response %v", value)
 			}
 			wg.Done()
